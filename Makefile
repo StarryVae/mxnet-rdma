@@ -33,7 +33,7 @@ lint:
 
 ps: build/libps.a
 
-OBJS = $(addprefix build/, customer.o postoffice.o rdma_van.o van.o meta.pb.o)
+OBJS = $(addprefix build/, customer.o postoffice.o van.o meta.pb.o)
 build/libps.a: $(OBJS)
 	ar crv $@ $(filter %.o, $?)
 
