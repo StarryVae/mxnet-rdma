@@ -11,6 +11,7 @@
 #include "./network_utils.h"
 #include "./meta.pb.h"
 #include "./zmq_van.h"
+#include "./rdma_van.h"
 #include "./resender.h"
 namespace ps {
 
@@ -23,6 +24,8 @@ static const int kDefaultHeartbeatInterval = 0;
 Van* Van::Create(const std::string& type) {
   if (type == "zmq") {
     return new ZMQVan();
+  } else if(type == "rdma"){
+    return new RDMAVan();
   } else {
     LOG(FATAL) << "unsupported van type: " << type;
     return nullptr;
