@@ -39,7 +39,6 @@ void Van::Start() {
   scheduler_.role     = Node::SCHEDULER;
   scheduler_.id       = kScheduler;
   is_scheduler_       = Postoffice::Get()->is_scheduler();
-
   // get my node info
   if (is_scheduler_) {
     my_node_ = scheduler_;
@@ -72,7 +71,6 @@ void Van::Start() {
     // set it explicitly to make re-register within a same process possible
     my_node_.id = Node::kEmpty;
   }
-
   // bind.
   my_node_.port = Bind(my_node_, is_scheduler_ ? 0 : 40);
   PS_VLOG(1) << "Bind to " << my_node_.DebugString();
