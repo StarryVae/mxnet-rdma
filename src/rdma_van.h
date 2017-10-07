@@ -39,6 +39,7 @@ protected:
 		struct rdma_cm_id *id;
 		struct ibv_qp *qp;
 		int sender;
+		int is_active; // if created by Connect, it is true.
 
 		char* recv_buffer;
 		char* send_buffer;
@@ -195,6 +196,7 @@ protected:
 		  CHECK_EQ(ibv_post_recv(id->qp, &wr, &bad_wr), 0);
 	}
 	void write_remote(struct connection *conn, int len){
+		  PS_VLOG(1) << my_node_.ShortDebugString() << " is writing remote.."; 
 		  struct ibv_send_wr wr, *bad_wr = NULL;
 		  struct ibv_sge sge;
 
@@ -253,26 +255,30 @@ protected:
 		PS_VLOG(1) << my_node_.ShortDebugString() << " now is at poll_cq_message";
 		if(id==nullptr){
 			while(true){
-				std::lock_guard<std::mutex> lk(cqes_mu_);
-				if(!cqes_message_.empty()){
-					ret = cqes_message_.front();
-					cqes_ctrl_.erase(cqes_message_.begin());
-					PS_VLOG(1) << my_node_.ShortDebugString() << " found a received message cqe.";
-					return ret;
-				}
+				{
+					std::lock_guard<std::mutex> lk(cqes_mu_);
+					if(!cqes_message_.empty()){
+						ret = cqes_message_.front();
+						cqes_ctrl_.erase(cqes_message_.begin());
+						PS_VLOG(1) << my_node_.ShortDebugString() << " found a received message cqe.";
+						return ret;
+					}
+				}				
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 		}
 		while(true){
-			std::lock_guard<std::mutex> lk(cqes_mu_);
-			for(auto it=cqes_message_.begin(); it!=cqes_message_.end();it++){
-				if((*it)->wr_id==(uintptr_t)id){
-					ret = *it;
-					cqes_message_.erase(it);
-					PS_VLOG(1) << my_node_.ShortDebugString() << " found a ctrl message cqe.";
-					return ret;
+			{
+				std::lock_guard<std::mutex> lk(cqes_mu_);
+				for(auto it=cqes_message_.begin(); it!=cqes_message_.end();it++){
+					if((*it)->wr_id==(uintptr_t)id){
+						ret = *it;
+						cqes_message_.erase(it);
+						PS_VLOG(1) << my_node_.ShortDebugString() << " found a ctrl message cqe.";
+						return ret;
+					}
 				}
-			}
+			}			
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}		
 	}
@@ -322,6 +328,7 @@ protected:
 				conn->ctrl_send_msg->sender_id = my_node_.id;
 				conn->ctrl_send_msg->mr.addr = (uintptr_t)conn->recv_buffer_mr->addr;
 				conn->ctrl_send_msg->mr.rkey = conn->recv_buffer_mr->rkey;
+				post_receive(conn->id);
 				send_message(conn->id);
 				struct ibv_wc *wc;
 				wc = poll_cq_ctrl(conn->id);
@@ -334,7 +341,7 @@ protected:
 					PS_VLOG(1) << my_node_.ShortDebugString() << " command received is " << conn->ctrl_recv_msg->command;
 					LOG(FATAL) << my_node_.ShortDebugString() << " should recieve MSG_MR after connected.";
 				}
-				post_receive(conn->id);
+				
 				senders_[conn->ctrl_recv_msg->sender_id] = conn->id;
 				num_connected_ ++;
 				PS_VLOG(1) << my_node_.ShortDebugString() << " has connected " << num_connected_ << " nodes.";
@@ -395,37 +402,27 @@ protected:
 			new std::thread(&RDMAVan::Listening, this));
 		return ntohs(rdma_get_src_port(listener_));
 	}
-
-	// active side, post connection request
-	void Connect(const Node& node) override{
-		if(is_scheduler_){
-			return;
-		}
-		CHECK_NE(node.id, node.kEmpty);
-		CHECK_NE(node.port, node.kEmpty);
-		CHECK(node.hostname.size());
-		int id = node.id;
-		auto it = senders_.find(id);
-		if (it != senders_.end()) { // already connected to the node
-			return;
-		}
-		// worker doesn't need to connect to the other workers. same for server
-		if ((node.role == my_node_.role) &&
-			(node.id != my_node_.id)) {
-			return;
-		}
-		struct addrinfo *addr;
-		struct rdma_cm_event *connect_event = NULL;
-		struct rdma_cm_id *conn_id= NULL;
-		struct rdma_event_channel *ec = NULL;
-
-		CHECK_EQ(getaddrinfo(node.hostname.c_str(), std::to_string(node.port).c_str(), NULL, &addr),0);
+	void block_until_connection_established(int node_id){
+		while(true){
+			{
+				std::lock_guard<std::mutex> lk(mu_);
+				auto it = senders_.find(node_id);
+				if(it!=senders_.end()){
+					return;
+				}
+			}			
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}		
+	}
+	void event_loop(addrinfo *addr){
+		struct rdma_cm_event *connect_event;
+		struct rdma_cm_id *conn_id;
+		struct rdma_event_channel *ec;
 		ec = rdma_create_event_channel();
 		CHECK_NOTNULL(ec);
 		CHECK_EQ(rdma_create_id(ec, &conn_id, NULL, RDMA_PS_TCP),0)
 			<< " create listenr failed.";
 		CHECK_EQ(rdma_resolve_addr(conn_id, NULL, addr->ai_addr, 500), 0);
-		freeaddrinfo(addr);
 		struct connection *conn = (struct connection *)malloc(sizeof(struct connection));
 		while (rdma_get_cm_event(ec, &connect_event) == 0) { // wait until connection established
 			struct rdma_cm_event event_copy;
@@ -448,13 +445,7 @@ protected:
 				CHECK_EQ(rdma_connect(conn->id, &cm_params), 0);
 			}
 			else if (event_copy.event == RDMA_CM_EVENT_ESTABLISHED){
-				PS_VLOG(1) << my_node_.ShortDebugString() << " Active side connection established.";
-				it = senders_.find(id);
-				if (it != senders_.end()) {
-					PS_VLOG(1) << my_node_.ShortDebugString() << " connection already established.";
-					break;
-				}
-				senders_[id] = conn->id;
+				PS_VLOG(1) << my_node_.ShortDebugString() << " Active side connection established.";				
 				struct ibv_wc *wc;
 				wc = poll_cq_ctrl(conn->id);
 				if(conn->ctrl_recv_msg->command == MSG_MR){
@@ -473,9 +464,47 @@ protected:
 				conn->ctrl_send_msg->mr.rkey = conn->recv_buffer_mr->rkey;
 				send_message(conn->id);
 				post_receive(conn->id); // why?
-				post_receive_ctrl(conn->id);
+				{
+					std::lock_guard<std::mutex> lk(mu_);
+					auto it = senders_.find(conn->sender);
+					if (it != senders_.end()) {
+						PS_VLOG(1) << my_node_.ShortDebugString() << " connection already established.";
+						break;
+					}
+					senders_[conn->sender] = conn->id;
+				}
+
 			}
 		}
+	}
+	// active side, post connection request
+	void Connect(const Node& node) override{
+		if(is_scheduler_){ // why scheduler needs to connect to itself?
+			return;
+		}
+		CHECK_NE(node.id, node.kEmpty);
+		CHECK_NE(node.port, node.kEmpty);
+		CHECK(node.hostname.size());
+		int id = node.id;
+		auto it = senders_.find(id);
+		if (it != senders_.end()) { // already connected to the node
+			return;
+		}
+		// worker doesn't need to connect to the other workers. same for server
+		if ((node.role == my_node_.role) &&
+			(node.id != my_node_.id)) {
+			return;
+		}
+		struct addrinfo *addr;
+		CHECK_EQ(getaddrinfo(node.hostname.c_str(), std::to_string(node.port).c_str(), NULL, &addr),0);
+		{
+			std::lock_guard<std::mutex> lk(thread_mu_);
+			std::thread *temp_thread = new std::thread(&RDMAVan::event_loop, this, addr);
+			thread_pool_.push_back(temp_thread);
+			thread_cnt_++;
+		}
+		block_until_connection_established(node.id);
+		freeaddrinfo(addr);
 	}
 	int SendMsg(const Message& msg) override{
 		PS_VLOG(1) << my_node_.ShortDebugString() << " Begining at SendMsg.";
@@ -506,7 +535,7 @@ protected:
 		// send data
 		int n = msg.data.size();
 		for(int i=0; i<n; ++i){
-			wc = poll_cq_message(conn->id);
+			wc = poll_cq_ctrl(conn->id);
 			if(conn->ctrl_recv_msg->command==MSG_READY){
 				post_receive_ctrl(conn->id);
 				SArray<char>* data = new SArray<char>(msg.data[i]);
@@ -517,7 +546,7 @@ protected:
 		}
 		post_receive_ctrl(conn->id);
 		write_remote(conn, 0);
-		wc = poll_cq_message(conn->id);
+		wc = poll_cq_ctrl(conn->id);
 		if(conn->ctrl_recv_msg->command==MSG_DONE){
 			return send_bytes;
 		}
@@ -576,6 +605,9 @@ private:
 	std::vector<ibv_wc *> cqes_ctrl_;
 	std::vector<ibv_wc *> cqes_message_;
 	std::unique_ptr<std::thread> cqes_thread_;
+	std::vector<std::thread *> thread_pool_;
+	std::mutex thread_mu_;
+	int thread_cnt_ = 0;
 };
 
 }
