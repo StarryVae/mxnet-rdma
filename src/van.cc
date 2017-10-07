@@ -78,7 +78,7 @@ void Van::Start() {
 
   // connect to the scheduler
   Connect(scheduler_);
-
+  PS_VLOG(1) << my_node_.ShortDebugString() << " Finished connect~~~~~~~~~~~~~~~~~~~~";
   // for debug use
   if (Environment::Get()->find("PS_DROP_MSG")) {
     drop_rate_ = atoi(Environment::Get()->find("PS_DROP_MSG"));
@@ -94,13 +94,16 @@ void Van::Start() {
     msg.meta.control.cmd = Control::ADD_NODE;
     msg.meta.control.node.push_back(my_node_);
     msg.meta.timestamp = timestamp_++;
+    PS_VLOG(1) <<  my_node_.ShortDebugString() << " let the scheduler know myself";
     Send(msg);
+    PS_VLOG(1) <<  my_node_.ShortDebugString() << " already let it know.";
   }
   // wait until ready
+  PS_VLOG(1) << my_node_.ShortDebugString() << " is here. ";
   while (!ready_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-
+  PS_VLOG(1) << my_node_.ShortDebugString() << " is here after ready_. " ;
   // resender
   if (Environment::Get()->find("PS_RESEND") && atoi(Environment::Get()->find("PS_RESEND")) != 0) {
     int timeout = 1000;
@@ -109,7 +112,7 @@ void Van::Start() {
     }
     resender_ = new Resender(timeout, 10, this);
   }
-
+  PS_VLOG(1) << "scheduler is at the end......................................................";
   if (!is_scheduler_) {
     // start heartbeat thread
     heartbeat_thread_ = std::unique_ptr<std::thread>(
@@ -140,13 +143,16 @@ int Van::Send(const Message& msg) {
 }
 
 void Van::Receiving() {
+  PS_VLOG(1) <<  my_node_.ShortDebugString() << " receiving thread start.........................................";
   const char* heartbeat_timeout_val = Environment::Get()->find("PS_HEARTBEAT_TIMEOUT");
   const int heartbeat_timeout
       = heartbeat_timeout_val ? atoi(heartbeat_timeout_val) : kDefaultHeartbeatInterval;
   Meta nodes;  // for scheduler usage
   while (true) {
     Message msg;
+    PS_VLOG(1) <<  my_node_.ShortDebugString() << " start receive a message";
     int recv_bytes = RecvMsg(&msg);
+    PS_VLOG(1) <<  my_node_.ShortDebugString() << " finish received a message";
 
     // For debug, drop received message
     if (ready_ && drop_rate_ > 0) {

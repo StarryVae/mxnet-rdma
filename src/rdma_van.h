@@ -60,6 +60,35 @@ protected:
 		struct ibv_cq *cq;
 		struct ibv_comp_channel *comp_channel;
 	 };
+	void poll_cq_thread(){
+		struct ibv_cq *cq;
+		struct ibv_wc wc;
+		PS_VLOG(1) << my_node_.ShortDebugString() << " poll_cq_thread start...";
+		while(true){
+			void *ctx;
+			CHECK_EQ(ibv_get_cq_event(share_ctx_->comp_channel, &cq, &ctx), 0);
+			ibv_ack_cq_events(cq, 1);
+			CHECK_EQ(ibv_req_notify_cq(cq, 0), 0);
+
+			while (ibv_poll_cq(cq, 1, &wc)) {
+				if (wc.status == IBV_WC_SUCCESS &&
+						wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM){
+					PS_VLOG(1) << my_node_.ShortDebugString() << " polled a message cqe...";
+					std::lock_guard<std::mutex> lk(cqes_mu_);
+					cqes_message_.push_back(&wc);
+				}else if(wc.status == IBV_WC_SUCCESS && (wc.opcode & IBV_WC_RECV)){
+					PS_VLOG(1) << my_node_.ShortDebugString() << " polled a ctrl cqe...";
+					std::lock_guard<std::mutex> lk(cqes_mu_);
+					cqes_ctrl_.push_back(&wc);
+				}else if(wc.status == IBV_WC_SUCCESS){
+					continue;
+				}
+				else{
+					LOG(FATAL) <<  my_node_.ShortDebugString() << " wc status not success";
+				}
+			}
+		}
+	}
 	void build_context(struct ibv_context *verbs){
 		/* build context */
 		if (share_ctx_) {
@@ -71,8 +100,12 @@ protected:
 		share_ctx_->ctx = verbs;
 		CHECK_NOTNULL(share_ctx_->pd = ibv_alloc_pd(share_ctx_->ctx));
 		CHECK_NOTNULL(share_ctx_->comp_channel = ibv_create_comp_channel(share_ctx_->ctx));
-		CHECK_NOTNULL(share_ctx_->cq = ibv_create_cq(share_ctx_->ctx, 10, NULL, share_ctx_->comp_channel, 0)); /* cqe=10 is arbitrary */
+		CHECK_NOTNULL(share_ctx_->cq = ibv_create_cq(share_ctx_->ctx, 15, NULL, share_ctx_->comp_channel, 0)); /* cqe=10 is arbitrary */
 		CHECK_EQ(ibv_req_notify_cq(share_ctx_->cq, 0), 0);
+		if(!cqes_thread_){
+			cqes_thread_ = std::unique_ptr<std::thread>(
+				new std::thread(&RDMAVan::poll_cq_thread, this));
+		}
 		/* end build context */
 	}
 	void build_qp_attr(struct ibv_qp_init_attr *qp_attr){
@@ -128,7 +161,7 @@ protected:
 	void build_params(struct rdma_conn_param *params){
 		  memset(params, 0, sizeof(*params));
 
-		  params->initiator_depth = params->responder_resources = 10;
+		  params->initiator_depth = params->responder_resources = 15;
 		  params->rnr_retry_count = 7; /* infinite retry */
 	}
 
@@ -186,27 +219,62 @@ protected:
 		  CHECK_EQ(ibv_post_send(conn->qp, &wr, &bad_wr), 0)
 		  	  << "ibv_post_send failed. ";
 	}
-	void poll_cq(struct ibv_cq *cq, struct ibv_wc *wc){
-		while(true){
-			void *ctx;
-			CHECK_EQ(ibv_get_cq_event(share_ctx_->comp_channel, &cq, &ctx), 0);
-			ibv_ack_cq_events(cq, 1);
-			CHECK_EQ(ibv_req_notify_cq(cq, 0), 0);
 
-			while (ibv_poll_cq(cq, 1, wc)) {
-				PS_VLOG(1) << my_node_.ShortDebugString() << " 's wc->status is " << wc->status;
-				if (wc->status == IBV_WC_SUCCESS &&
-						(wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM || wc->opcode & IBV_WC_RECV)){
-					return;
-				}else if(wc->status == IBV_WC_SUCCESS){
-					PS_VLOG(1) << my_node_.ShortDebugString() << " polled a send success.";
-					continue;
+	struct ibv_wc* poll_cq_ctrl(struct rdma_cm_id *id){
+		ibv_wc *ret;
+		PS_VLOG(1) << my_node_.ShortDebugString() << " now is at poll_cq_ctrl";
+		if(id==nullptr){
+			while(true){
+				std::lock_guard<std::mutex> lk(cqes_mu_);
+				if(!cqes_ctrl_.empty()){
+					ret = cqes_ctrl_.front();
+					cqes_ctrl_.erase(cqes_ctrl_.begin());
+					PS_VLOG(1) << my_node_.ShortDebugString() << " found a received ctrl cqe.";
+					return ret;
 				}
-				else{
-					PS_VLOG(1) <<  my_node_.ShortDebugString() << " wc status not success";
-				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 		}
+		while(true){
+			std::lock_guard<std::mutex> lk(cqes_mu_);
+			for(auto it=cqes_ctrl_.begin(); it!=cqes_ctrl_.end();it++){
+				if((*it)->wr_id==(uintptr_t)id){
+					ret = *it;
+					cqes_ctrl_.erase(it);
+					PS_VLOG(1) << my_node_.ShortDebugString() << " found a ctrl received cqe.";
+					return ret;
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}		
+	}
+	struct ibv_wc* poll_cq_message(struct rdma_cm_id *id){
+		ibv_wc *ret;
+		PS_VLOG(1) << my_node_.ShortDebugString() << " now is at poll_cq_message";
+		if(id==nullptr){
+			while(true){
+				std::lock_guard<std::mutex> lk(cqes_mu_);
+				if(!cqes_message_.empty()){
+					ret = cqes_message_.front();
+					cqes_ctrl_.erase(cqes_message_.begin());
+					PS_VLOG(1) << my_node_.ShortDebugString() << " found a received message cqe.";
+					return ret;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+		}
+		while(true){
+			std::lock_guard<std::mutex> lk(cqes_mu_);
+			for(auto it=cqes_message_.begin(); it!=cqes_message_.end();it++){
+				if((*it)->wr_id==(uintptr_t)id){
+					ret = *it;
+					cqes_message_.erase(it);
+					PS_VLOG(1) << my_node_.ShortDebugString() << " found a ctrl message cqe.";
+					return ret;
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}		
 	}
 	void send_message(struct rdma_cm_id *id){
 		struct connection *ctx = (struct connection *)id->context;
@@ -243,7 +311,7 @@ protected:
 			struct rdma_cm_event event_copy;
 			memcpy(&event_copy, listener_event_, sizeof(*listener_event_));
 			rdma_ack_cm_event(listener_event_);
-
+			PS_VLOG(1) <<  my_node_.ShortDebugString() << "event type: " << event_copy.event;
 			if (event_copy.event == RDMA_CM_EVENT_CONNECT_REQUEST){
 				on_connect_request(event_copy.id);
 			}
@@ -255,10 +323,8 @@ protected:
 				conn->ctrl_send_msg->mr.addr = (uintptr_t)conn->recv_buffer_mr->addr;
 				conn->ctrl_send_msg->mr.rkey = conn->recv_buffer_mr->rkey;
 				send_message(conn->id);
-				struct ibv_cq *cq;
-				struct ibv_wc wc;
-				rdma_get_send_comp(conn->id, &wc);
-				poll_cq(cq, &wc);
+				struct ibv_wc *wc;
+				wc = poll_cq_ctrl(conn->id);
 				if(conn->ctrl_recv_msg->command == MSG_MR){
 					PS_VLOG(1) << my_node_.ShortDebugString() << " has received a MSG_MR";
 					conn->peer_addr = conn->ctrl_recv_msg->mr.addr;
@@ -273,9 +339,14 @@ protected:
 				num_connected_ ++;
 				PS_VLOG(1) << my_node_.ShortDebugString() << " has connected " << num_connected_ << " nodes.";
 			}
+			else if(event_copy.event == RDMA_CM_EVENT_DISCONNECTED ){
+				num_connected_--;
+				if(num_connected_==0){
+					break;
+				}
+			}
 			else{
 				LOG(FATAL) << my_node_.ShortDebugString() <<  " Unknown event type.";
-				break;
 			}
 		}
 	}
@@ -327,6 +398,9 @@ protected:
 
 	// active side, post connection request
 	void Connect(const Node& node) override{
+		if(is_scheduler_){
+			return;
+		}
 		CHECK_NE(node.id, node.kEmpty);
 		CHECK_NE(node.port, node.kEmpty);
 		CHECK(node.hostname.size());
@@ -381,9 +455,8 @@ protected:
 					break;
 				}
 				senders_[id] = conn->id;
-				struct ibv_cq *cq;
-				struct ibv_wc wc;
-				poll_cq(cq, &wc);
+				struct ibv_wc *wc;
+				wc = poll_cq_ctrl(conn->id);
 				if(conn->ctrl_recv_msg->command == MSG_MR){
 					PS_VLOG(1) << my_node_.ShortDebugString() << " has received a MSG_MR.";
 					conn->peer_addr = conn->ctrl_recv_msg->mr.addr;
@@ -400,13 +473,13 @@ protected:
 				conn->ctrl_send_msg->mr.rkey = conn->recv_buffer_mr->rkey;
 				send_message(conn->id);
 				post_receive(conn->id); // why?
+				post_receive_ctrl(conn->id);
 				break;
 			}
 		}
-		CHECK_EQ(rdma_destroy_id(conn_id), 0);
-		rdma_destroy_event_channel(ec);
 	}
 	int SendMsg(const Message& msg) override{
+		PS_VLOG(1) << my_node_.ShortDebugString() << " Begining at SendMsg.";
 		std::lock_guard<std::mutex> lk(mu_);
 		// find the socket
 		int id = msg.meta.recver;
@@ -416,24 +489,25 @@ protected:
 		  LOG(WARNING) << " there is no socket to node " << id;
 		  return -1;
 		}
+		PS_VLOG(1) << my_node_.ShortDebugString() << " Get the connection";
 		// get the connection context
 		connection *conn = (struct connection *)it->second->context;
+		CHECK_NOTNULL(conn);
 		// to receive control message
-		post_receive_ctrl(conn->id);
-
+		post_receive_ctrl(it->second);
+		PS_VLOG(1) << my_node_.ShortDebugString() << " After post_receive_ctrl...................";
 		// send meta
 		int meta_size;
 		PackMeta(msg.meta, &conn->send_buffer, &meta_size);
 		write_remote(conn, meta_size);
 		int send_bytes = meta_size;
-
-		struct ibv_cq *cq;
-		struct ibv_wc wc;
+		PS_VLOG(1) << my_node_.ShortDebugString() << " After write_remote.";
+		struct ibv_wc *wc;
 
 		// send data
 		int n = msg.data.size();
 		for(int i=0; i<n; ++i){
-			poll_cq(cq, &wc);
+			wc = poll_cq_message(conn->id);
 			if(conn->ctrl_recv_msg->command==MSG_READY){
 				post_receive_ctrl(conn->id);
 				SArray<char>* data = new SArray<char>(msg.data[i]);
@@ -444,7 +518,7 @@ protected:
 		}
 		post_receive_ctrl(conn->id);
 		write_remote(conn, 0);
-		poll_cq(cq, &wc);
+		wc = poll_cq_message(conn->id);
 		if(conn->ctrl_recv_msg->command==MSG_DONE){
 			return send_bytes;
 		}
@@ -455,23 +529,23 @@ protected:
 		msg->data.clear();
 		size_t recv_bytes = 0;
 		struct rdma_cm_id *id;
-		struct ibv_cq *cq;
-		struct ibv_wc wc;
+		struct ibv_wc *wc;
 		struct connection *conn;
 
-		poll_cq(cq, &wc);
-		id = (struct rdma_cm_id *)(wc.wr_id);
+		wc = poll_cq_message(nullptr);
+		id = (struct rdma_cm_id *)(wc->wr_id);
 		conn = (struct connection *)id->context;
-		uint32_t size = ntohl(wc.imm_data);
+		uint32_t size = ntohl(wc->imm_data);
 		UnpackMeta(conn->recv_buffer, size, &(msg->meta));
 		msg->meta.sender = conn->sender;
 		msg->meta.recver = my_node_.id;
 		recv_bytes += size;
-
+		conn->ctrl_send_msg->command = MSG_READY;
+		send_message(conn->id);
 		for(int i=0; ; ++i){
 			post_receive(id);
-			poll_cq(cq, &wc);
-			size = ntohl(wc.imm_data);
+			wc = poll_cq_message(conn->id);
+			size = ntohl(wc->imm_data);
 			if(size){
 				SArray<char> data;
 				data.CopyFrom(conn->recv_buffer, size);
@@ -491,7 +565,7 @@ protected:
 	
 private:
 	int num_connected_;
- 	std::mutex mu_;
+	std::mutex mu_;
  	struct context *share_ctx_ = NULL;
 	std::unique_ptr<std::thread> listen_thread_;
 	std::unordered_map<int, rdma_cm_id*> senders_;
@@ -499,6 +573,10 @@ private:
 	struct rdma_cm_event *listener_event_ = NULL;
 	struct rdma_cm_id *listener_ = NULL;
 	struct rdma_event_channel *listener_channel_ = NULL;
+	std::mutex cqes_mu_;
+	std::vector<ibv_wc *> cqes_ctrl_;
+	std::vector<ibv_wc *> cqes_message_;
+	std::unique_ptr<std::thread> cqes_thread_;
 };
 
 }
