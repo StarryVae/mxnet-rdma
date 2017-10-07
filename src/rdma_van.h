@@ -474,7 +474,6 @@ protected:
 				send_message(conn->id);
 				post_receive(conn->id); // why?
 				post_receive_ctrl(conn->id);
-				break;
 			}
 		}
 	}
