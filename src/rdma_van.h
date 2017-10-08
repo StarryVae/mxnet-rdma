@@ -141,6 +141,12 @@ protected:
 		if(!id){
 			while(true){
 				{
+					{
+						if(send_myself_){
+							check_send_myself_ = true;
+							return ret;
+						}
+					}
 					std::lock_guard<std::mutex> lk(cqes_message_mu_);
 					if(!cqes_message_.empty()){
 						ret = cqes_message_.front();
@@ -413,7 +419,7 @@ protected:
 				break;
 			}
 			else{
-				LOG(FATAL) << my_node_.ShortDebugString() <<  " unknown event type.";
+				PS_VLOG(1) << my_node_.ShortDebugString() <<  " unknown event type.";
 			}
 		}
 	}
@@ -488,7 +494,7 @@ protected:
 				continue;
 			}
 			else{
-				LOG(FATAL) << my_node_.ShortDebugString() <<  " unknown event type.";
+				PS_VLOG(1) << my_node_.ShortDebugString() <<  " unknown event type.";
 			}
 		}
 	}
@@ -540,7 +546,7 @@ protected:
 		return ntohs(rdma_get_src_port(listener_));
 	}
 	void Connect(const Node& node) override{
-		if(is_scheduler_){ // why scheduler needs to connect to itself at zmq_van.h?
+		if(is_scheduler_ || node.role==my_node_.role){ // why scheduler needs to connect to itself at zmq_van.h?
 			return;
 		}
 		CHECK_NE(node.id, node.kEmpty);
@@ -576,6 +582,21 @@ protected:
 		// find the socket
 		int id = msg.meta.recver;
 		CHECK_NE(id, Meta::kEmpty);
+		if(id==my_node_.id){ // send to my self.
+			{
+				std::lock_guard<std::mutex> lk(send_myself_mu_);
+				if(!send_myself_){
+					send_myself_ = true;
+					if(myself_meta_buff){
+						delete[] myself_meta_buff;
+					}
+					PackMeta(msg.meta, &myself_meta_buff, &myself_meta_size);
+					return sizeof(myself_meta_size);
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+
 		auto it = senders_.find(id);
 		if (it == senders_.end()) {
 		  LOG(WARNING) << " there is no socket to node " << id;
@@ -636,6 +657,12 @@ protected:
 		struct connection *conn;
 		// receive meta.
 		wc = poll_cq_message(nullptr);
+		if(send_myself_ && check_send_myself_){
+			UnpackMeta(myself_meta_buff, myself_meta_size, &(msg->meta));
+			check_send_myself_ = false;
+			send_myself_ = false;
+			return myself_meta_size;
+		}
 		id = (struct rdma_cm_id *)(uintptr_t)wc.wr_id;
 		conn = (struct connection *)id->context;
 		uint32_t size = ntohl(wc.imm_data);
@@ -712,6 +739,14 @@ private:
 	std::mutex thread_mu_;
 	std::vector<std::thread *> thread_pool_;
 	std::unique_ptr<std::thread> listen_thread_;
+
+	// send to myself;
+	std::mutex send_myself_mu_;
+	bool send_myself_ = false;
+	bool check_send_myself_ = false;
+	char *myself_meta_buff;
+	int myself_meta_size;
+
 };
 
 }
