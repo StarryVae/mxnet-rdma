@@ -290,6 +290,7 @@ void Van::Receiving() {
           ready_ = true;
         }
       } else if (ctrl.cmd == Control::BARRIER) {
+    	  PS_VLOG(1) << my_node_.ShortDebugString() << " barrier here !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
         if (msg.meta.request) {
           if (barrier_count_.empty()) {
             barrier_count_.resize(8, 0);

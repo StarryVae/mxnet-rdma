@@ -143,15 +143,15 @@ protected:
 				{
 					std::lock_guard<std::mutex> lk(cqes_message_mu_);
 					if(!cqes_message_.empty()){
-						PS_VLOG(1) << my_node_.ShortDebugString() <<
-								" cqes_message_ still has " << cqes_message_.size() << " entries.";
 						ret = cqes_message_.front();
-						cqes_message_.erase(cqes_message_.begin());
-						struct rdma_cm_id *id = (struct rdma_cm_id *)(uintptr_t)ret.wr_id;
-						struct connection *conn = conn = (struct connection *)id->context;
-						PS_VLOG(1) << my_node_.ShortDebugString() << " receive a wild card message cqe from "
-								<< conn->sender;
-						return ret;
+						if(ntohl(ret.imm_data) != 1) {// magic number
+							cqes_message_.erase(cqes_message_.begin());
+							struct rdma_cm_id *id = (struct rdma_cm_id *)(uintptr_t)ret.wr_id;
+							struct connection *conn = conn = (struct connection *)id->context;
+							PS_VLOG(1) << my_node_.ShortDebugString() << " receive a wild card message cqe from "
+									<< conn->sender;
+							return ret;
+						}
 					}
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -594,7 +594,7 @@ protected:
 		// 2. receive data with imm_data = 0.
 		struct ibv_wc wc;
 		wc = poll_cq_message(conn->id);
-		if(ntohl(wc.imm_data)==0){
+		if(ntohl(wc.imm_data)==1){
 		}else{
 			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a message with imm_data = 0.";
 		}
@@ -646,7 +646,7 @@ protected:
 
 		// send MSG_READY
 		post_receive_message(id);
-		post_send_message(conn->id, 0);
+		post_send_message(conn->id, 1);
 
 		for(int i=0; ; ++i){
 			wc = poll_cq_message(id);
