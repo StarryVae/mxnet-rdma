@@ -377,7 +377,6 @@ protected:
 			}
 			else if (event_copy.event == RDMA_CM_EVENT_ESTABLISHED){
 				//PS_VLOG(1) << my_node_.ShortDebugString() << " EventLooping side connection established.";
-				// post receive ctrl for RecvMsg and SendMsg.
 				conn->ctrl_send_msg->command = MSG_MR;
 				conn->ctrl_send_msg->sender_id = my_node_.id;
 				conn->ctrl_send_msg->mr.addr = (uintptr_t)conn->recv_buffer_mr->addr;
@@ -399,6 +398,8 @@ protected:
 				}else{
 					LOG(FATAL) << my_node_.ShortDebugString() << " should receive a MSG_MR after connected.";
 				}
+				// post receive message for RecvMsg and SendMsg.
+				post_receive_message(conn->id);
 				{
 					std::lock_guard<std::mutex> lk(senders_mu_);
 					auto it = senders_.find(conn->sender);
@@ -582,40 +583,43 @@ protected:
 		}
 		connection *conn = (struct connection *)it->second->context;
 		CHECK_NOTNULL(conn);
-		// send meta
+		// 1. write meta
 		int meta_size;
 		char* meta_buf;
 		PackMeta(msg.meta, &meta_buf, &meta_size);
 		memcpy(conn->send_buffer, meta_buf, meta_size);
-		post_receive_ctrl(conn->id);
 		post_send_message(conn->id, meta_size);
 		int send_bytes = meta_size;
+
+		// 2. receive data with imm_data = 0.
 		struct ibv_wc wc;
+		wc = poll_cq_message(conn->id);
+		if(ntohl(wc.imm_data)==0){
+		}else{
+			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a message with imm_data = 0.";
+		}
 		// send data
 		int n = msg.data.size();
 		//PS_VLOG(1) << my_node_.ShortDebugString() << " data size is " << n;
 		for(int i=0; i<n; ++i){
-			wc = poll_cq_ctrl(conn->id);
+			SArray<char>* data = new SArray<char>(msg.data[i]);
+			memcpy(conn->recv_buffer, data->data(), data->size());
 			post_receive_ctrl(conn->id);
+			post_send_message(conn->id, data->size());
+			send_bytes += data->size();
+
+			wc = poll_cq_ctrl(conn->id);
 			if(conn->ctrl_recv_msg->command==MSG_READY){
-				SArray<char>* data = new SArray<char>(msg.data[i]);
-				memcpy(conn->recv_buffer, data->data(), data->size());
-				post_send_message(conn->id, data->size());
-				send_bytes += data->size();
+				continue;
 			}else{
 				LOG(FATAL) << my_node_.ShortDebugString() << " should receive a MSG_READY after send data. ";
 			}
 		}
-		wc = poll_cq_ctrl(conn->id);
 		post_receive_ctrl(conn->id);
-		if(conn->ctrl_recv_msg->command==MSG_READY){
-			post_send_message(conn->id, 0);
-		}else{
-			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a MSG_READY after send data. ";
-		}
+		post_send_message(conn->id, 0);
 		wc = poll_cq_ctrl(conn->id);
-		post_receive_message(conn->id);
 		if(conn->ctrl_recv_msg->command==MSG_DONE){
+			post_receive_message(conn->id);
 			//PS_VLOG(1) << my_node_.ShortDebugString() << " send a message: " << send_bytes << " bytes. ";
 			return send_bytes;
 		}else{
@@ -642,9 +646,7 @@ protected:
 
 		// send MSG_READY
 		post_receive_message(id);
-		conn->ctrl_send_msg->command = MSG_READY;
-		conn->ctrl_send_msg->sender_id = my_node_.id;
-		post_send_ctrl(conn->id);
+		post_send_message(conn->id, 0);
 
 		for(int i=0; ; ++i){
 			wc = poll_cq_message(id);
