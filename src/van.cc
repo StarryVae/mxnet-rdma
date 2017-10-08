@@ -78,7 +78,7 @@ void Van::Start() {
 
   // connect to the scheduler
   Connect(scheduler_);
-  PS_VLOG(1) << my_node_.ShortDebugString() << " Finished connect~~~~~~~~~~~~~~~~~~~~";
+  PS_VLOG(2) << my_node_.ShortDebugString() << " 's node id is " << my_node_.id;
   // for debug use
   if (Environment::Get()->find("PS_DROP_MSG")) {
     drop_rate_ = atoi(Environment::Get()->find("PS_DROP_MSG"));
@@ -99,7 +99,6 @@ void Van::Start() {
     PS_VLOG(1) <<  my_node_.ShortDebugString() << " already let it know.";
   }
   // wait until ready
-  PS_VLOG(1) << my_node_.ShortDebugString() << " is here. ";
   while (!ready_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -139,21 +138,19 @@ int Van::Send(const Message& msg) {
   if (Postoffice::Get()->verbose() >= 2) {
     PS_VLOG(2) << msg.DebugString();
   }
+  PS_VLOG(1) << my_node_.ShortDebugString() << " send a message with " << send_bytes <<" bytes.";
   return send_bytes;
 }
 
 void Van::Receiving() {
-  PS_VLOG(1) <<  my_node_.ShortDebugString() << " receiving thread start.........................................";
   const char* heartbeat_timeout_val = Environment::Get()->find("PS_HEARTBEAT_TIMEOUT");
   const int heartbeat_timeout
       = heartbeat_timeout_val ? atoi(heartbeat_timeout_val) : kDefaultHeartbeatInterval;
   Meta nodes;  // for scheduler usage
   while (true) {
     Message msg;
-    PS_VLOG(1) <<  my_node_.ShortDebugString() << " start receive a message";
     int recv_bytes = RecvMsg(&msg);
-    PS_VLOG(1) <<  my_node_.ShortDebugString() << " finish received a message";
-
+    PS_VLOG(1) << my_node_.ShortDebugString() << " recv a message with " << recv_bytes <<" bytes.";
     // For debug, drop received message
     if (ready_ && drop_rate_ > 0) {
       unsigned seed = time(NULL) + my_node_.id;
@@ -186,7 +183,8 @@ void Van::Receiving() {
         Meta recovery_nodes;  // store recovery nodes
         recovery_nodes.control.cmd = Control::ADD_NODE;
         // assign an id
-        if (msg.meta.sender == Meta::kEmpty) {
+        if (is_scheduler_ && !ready_) {
+        	PS_VLOG(1) << my_node_.ShortDebugString() << " is at assign an ID~~~~~~~~~~~";
           CHECK(is_scheduler_);
           CHECK_EQ(ctrl.node.size(), 1);
           if (nodes.control.node.size() < num_nodes) {
@@ -216,7 +214,7 @@ void Van::Receiving() {
           const auto& node = ctrl.node[i];
           if (my_node_.hostname == node.hostname &&
               my_node_.port == node.port) {
-            my_node_ = node;
+            // my_node_ = node;
             std::string rank = std::to_string(Postoffice::IDtoRank(node.id));
 #ifdef _MSC_VER
             _putenv_s("DMLC_RANK", rank.c_str());
@@ -229,6 +227,7 @@ void Van::Receiving() {
         if (is_scheduler_) {
           time_t t = time(NULL);
           if (nodes.control.node.size() == num_nodes) {
+        	PS_VLOG(1) << my_node_.ShortDebugString() << " received assign ID step.................................";
             // sort the nodes according their ip and port,
             std::sort(nodes.control.node.begin(), nodes.control.node.end(),
                       [](const Node& a, const Node& b) {
@@ -236,13 +235,13 @@ void Van::Receiving() {
                       });
             // assign node rank
             for (auto& node : nodes.control.node) {
-              CHECK_EQ(node.id, Node::kEmpty);
-              int id = node.role == Node::SERVER ?
-                       Postoffice::ServerRankToID(num_servers_) :
-                       Postoffice::WorkerRankToID(num_workers_);
-              PS_VLOG(1) << "assign rank=" << id << " to node " << node.DebugString();
-              node.id = id;
-              Connect(node);
+//              CHECK_EQ(node.id, Node::kEmpty);
+//              int id = node.role == Node::SERVER ?
+//                       Postoffice::ServerRankToID(num_servers_) :
+//                       Postoffice::WorkerRankToID(num_workers_);
+//              PS_VLOG(1) << "assign rank=" << id << " to node " << node.DebugString();
+//              node.id = id;
+//              Connect(node);
               if (node.role == Node::SERVER) ++num_servers_;
               if (node.role == Node::WORKER) ++num_workers_;
               Postoffice::Get()->UpdateHeartbeat(node.id, t);
@@ -254,6 +253,7 @@ void Van::Receiving() {
                      kWorkerGroup + kServerGroup)) {
               back.meta.recver = r;
               back.meta.timestamp = timestamp_++;
+              PS_VLOG(1) << my_node_.ShortDebugString() << " send back to node: " << r;
               Send(back);
             }
             PS_VLOG(1) << "the scheduler is connected to "
