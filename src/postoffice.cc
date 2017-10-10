@@ -115,7 +115,6 @@ void Postoffice::Barrier(int node_group) {
   } else if (role == Node::SERVER) {
     CHECK(node_group & kServerGroup);
   }
-  PS_VLOG(1) << my_node_.ShortDebugString() << " Barrier here start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~";
   std::unique_lock<std::mutex> ulk(barrier_mu_);
   barrier_done_ = false;
   Message req;
