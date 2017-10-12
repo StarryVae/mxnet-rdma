@@ -153,7 +153,7 @@ void Van::Receiving() {
     PS_VLOG(1) << my_node_.ShortDebugString() << " recv a message with " << recv_bytes <<" bytes.";
     // For debug, drop received message
     if (ready_ && drop_rate_ > 0) {
-      unsigned seed = time(NULL) + my_node_.id;
+      unsigned seed = time(NULL) + myZMQVan();_node_.id;
       if (rand_r(&seed) % 100 < drop_rate_) {
         LOG(WARNING) << "Drop message " << msg.DebugString();
         continue;
@@ -330,6 +330,7 @@ void Van::Receiving() {
         }
       }
     } else {
+      PS_VLOG(1) << my_node_.ShortDebugString() << " msg.meta.sender is " << msg.meta.sender;
       CHECK_NE(msg.meta.sender, Meta::kEmpty);
       CHECK_NE(msg.meta.recver, Meta::kEmpty);
       CHECK_NE(msg.meta.customer_id, Meta::kEmpty);

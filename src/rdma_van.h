@@ -70,7 +70,7 @@ protected:
 		//PS_VLOG(1) << my_node_.ShortDebugString() << " Polling() start...";
 		struct ibv_cq *cq;
 		struct ibv_wc wc;
-		while(true && !stop_){
+		while(!stop_){
 			void *ctx;
 			CHECK_EQ(ibv_get_cq_event(share_ctx_->comp_channel, &cq, &ctx), 0);
 			ibv_ack_cq_events(cq, 1);
@@ -359,7 +359,7 @@ protected:
 			<< " create listenr failed.";
 		CHECK_EQ(rdma_resolve_addr(conn_id, NULL, addr->ai_addr, 500), 0);
 		struct connection *conn = (struct connection *)malloc(sizeof(struct connection));
-		while (rdma_get_cm_event(ec, &connect_event) == 0) {
+		while (!stop_ && rdma_get_cm_event(ec, &connect_event) == 0) {
 			struct rdma_cm_event event_copy;
 			memcpy(&event_copy, connect_event, sizeof(*connect_event));
 			rdma_ack_cm_event(connect_event);
@@ -419,12 +419,15 @@ protected:
 				break;
 			}
 			else{
+				if(stop_){
+					break;
+				}
 				PS_VLOG(1) << my_node_.ShortDebugString() <<  " unknown event type.";
 			}
 		}
 	}
 	void Listening(){
-		while (rdma_get_cm_event(listener_channel_, &listener_event_) == 0 && !stop_) {
+		while (!stop_ && rdma_get_cm_event(listener_channel_, &listener_event_) == 0) {
 			struct rdma_cm_event event_copy;
 			memcpy(&event_copy, listener_event_, sizeof(*listener_event_));
 			rdma_ack_cm_event(listener_event_);
@@ -443,7 +446,8 @@ protected:
 				register_memory(conn);
 				//post receive ctrol for control message with MSG_MR.
 				post_receive_ctrl(event_copy.id);
-				CHECK_EQ(rdma_accept(event_copy.id, &cm_params), 0);
+				CHECK_EQ(rdma_accept(event_copy.id, &cm_params), 0)
+					<< my_node_.ShortDebugString() << " rdma_accept failed";
 			}
 			else if (event_copy.event == RDMA_CM_EVENT_ESTABLISHED){
 				//PS_VLOG(1) << my_node_.ShortDebugString() << " Lisenting side connection established.";
@@ -491,7 +495,9 @@ protected:
 				}
 			}
 			else if(event_copy.event == RDMA_CM_EVENT_DISCONNECTED ){
-				continue;
+				if(stop_){
+					break;
+				}
 			}
 			else{
 				PS_VLOG(1) << my_node_.ShortDebugString() <<  " unknown event type.";
@@ -508,23 +514,35 @@ protected:
 		Van::Start();
 	}
 	void Stop() override{
-		PS_VLOG(1) << my_node_.ShortDebugString() << " is stopping";
-		Van::Stop();
+		PS_VLOG(1) << my_node_.ShortDebugString() << " is stopping";		
 		stop_ = true;
-		rdma_destroy_event_channel(listener_channel_);
-		// free qp and id
-		{
-			std::lock_guard<std::mutex> lk(senders_mu_);
-			for(auto it=senders_.begin(); it!=senders_.end(); ++it){
-				rdma_destroy_qp(it->second);
-				rdma_destroy_id(it->second);
-			}
+		for(auto i: senders_){
+			rdma_disconnect(i.second);
 		}
-		// free share_ctx_
-		CHECK_EQ(ibv_dealloc_pd(share_ctx_->pd), 0);
-		CHECK_EQ(ibv_destroy_comp_channel(share_ctx_->comp_channel), 0);
-		CHECK_EQ(ibv_destroy_cq(share_ctx_->cq), 0);
-		free(share_ctx_);
+		listen_thread_->join();
+		PS_VLOG(1) << my_node_.ShortDebugString() << " listen_thread_ joined";	
+		poll_thread_->join();
+		PS_VLOG(1) << my_node_.ShortDebugString() << " poll_thread_ joined";	
+		for(int i=0; i<thread_pool_.size(); i++){
+			thread_pool_[i]->join();
+			PS_VLOG(1) << my_node_.ShortDebugString() << " thread " << i  <<" joined";	
+		}
+		PS_VLOG(1) << my_node_.ShortDebugString() << " stopped";
+		Van::Stop();
+		// rdma_destroy_event_channel(listener_channel_);
+		// // free qp and id
+		// {
+		// 	std::lock_guard<std::mutex> lk(senders_mu_);
+		// 	for(auto it=senders_.begin(); it!=senders_.end(); ++it){
+		// 		rdma_destroy_qp(it->second);
+		// 		rdma_destroy_id(it->second);
+		// 	}
+		// }
+		// // free share_ctx_
+		// CHECK_EQ(ibv_dealloc_pd(share_ctx_->pd), 0);
+		// CHECK_EQ(ibv_destroy_comp_channel(share_ctx_->comp_channel), 0);
+		// CHECK_EQ(ibv_destroy_cq(share_ctx_->cq), 0);
+		// free(share_ctx_);
 	}
 	int Bind(const Node &node, int max_retry) override {
 		memset(&addr_, 0, sizeof(addr_));
@@ -567,6 +585,7 @@ protected:
 			return;
 		}
 		struct addrinfo *addr;
+		PS_VLOG(2) << my_node_.ShortDebugString() << " is connecting to " << node.hostname << " : " << node.port;
 		CHECK_EQ(getaddrinfo(node.hostname.c_str(), std::to_string(node.port).c_str(), NULL, &addr),0);
 		{
 			std::lock_guard<std::mutex> lk(thread_mu_);
@@ -582,7 +601,7 @@ protected:
 		// find the socket
 		int id = msg.meta.recver;
 		CHECK_NE(id, Meta::kEmpty);
-		if(id==my_node_.id){ // send to my self.
+		if(id==my_node_.id){ // send to myself.
 			{
 				std::lock_guard<std::mutex> lk(send_myself_mu_);
 				if(!send_myself_){
@@ -590,6 +609,9 @@ protected:
 					if(myself_meta_buff){
 						delete[] myself_meta_buff;
 					}
+					PS_VLOG(1) << my_node_.ShortDebugString() << " send to myself with sender: " << 
+						msg.meta.recver;
+
 					PackMeta(msg.meta, &myself_meta_buff, &myself_meta_size);
 					return sizeof(myself_meta_size);
 				}
@@ -617,7 +639,7 @@ protected:
 		wc = poll_cq_message(conn->id);
 		if(ntohl(wc.imm_data)==1){
 		}else{
-			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a message with imm_data = 0.";
+			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a message with imm_data = 1.";
 		}
 		// send data
 		int n = msg.data.size();
@@ -659,6 +681,7 @@ protected:
 		wc = poll_cq_message(nullptr);
 		if(send_myself_ && check_send_myself_){
 			UnpackMeta(myself_meta_buff, myself_meta_size, &(msg->meta));
+			PS_VLOG(1) << my_node_.ShortDebugString() << " received from myself with bytes: " << myself_meta_size;
 			check_send_myself_ = false;
 			send_myself_ = false;
 			return myself_meta_size;
