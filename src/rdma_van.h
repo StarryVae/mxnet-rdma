@@ -431,8 +431,11 @@ protected:
 		}
 	}
 	void Listening(){
+		if(my_node_.role == Node::WORKER){// worker only have active side.
+			return;
+		}
 		while (!stop_ && rdma_get_cm_event(listener_channel_, &listener_event_) == 0) {
-			if(stop_){
+			if(stop_){ 
 				break;
 			}
 			struct rdma_cm_event event_copy;
@@ -526,14 +529,16 @@ protected:
 		stop_ = true;
 		for(auto i: senders_){
 			rdma_disconnect(i.second);
+			//PS_VLOG(1) << my_node_.ShortDebugString() << " disconnected with " << i.first;
 		}
+		//PS_VLOG(1) << my_node_.ShortDebugString() << " wait for Listening joining.";
 		listen_thread_->join();
-		//PS_VLOG(1) << my_node_.ShortDebugString() << " listen_thread_ joined";	
+		//PS_VLOG(1) << my_node_.ShortDebugString() << " wait for Polling joining.";	
 		poll_thread_->join();
 		//PS_VLOG(1) << my_node_.ShortDebugString() << " poll_thread_ joined";	
 		for(int i=0; i<thread_pool_.size(); i++){
+			//PS_VLOG(1) << my_node_.ShortDebugString() << " wait for thread " << i  <<" to join";	
 			thread_pool_[i]->join();
-			//PS_VLOG(1) << my_node_.ShortDebugString() << " thread " << i  <<" joined";	
 		}
 		PS_VLOG(1) << my_node_.ShortDebugString() << " stopped";
 		Van::Stop();
@@ -572,9 +577,7 @@ protected:
 		return ntohs(rdma_get_src_port(listener_));
 	}
 	void Connect(const Node& node) override{
-		if(is_scheduler_ || node.role==my_node_.role){ // why scheduler needs to connect to itself at zmq_van.h?
-			return;
-		}
+		
 		CHECK_NE(node.id, node.kEmpty);
 		CHECK_NE(node.port, node.kEmpty);
 		CHECK(node.hostname.size());
@@ -587,9 +590,17 @@ protected:
 				return;
 			}
 		}
+		if(is_scheduler_ || node.role==my_node_.role){ // why scheduler needs to connect to itself at zmq_van.h?
+			return;
+		}
 		// worker doesn't need to connect to the other workers. same for server
 		if ((node.role == my_node_.role) &&
 			(node.id != my_node_.id)) {
+			return;
+		}
+		if(my_node_.role == Node::SERVER && node.role == Node::WORKER){ //server only have passive side.
+			connection_established(id);
+			PS_VLOG(1) << my_node_.ShortDebugString() << " build connection to " << id;
 			return;
 		}
 		struct addrinfo *addr;
