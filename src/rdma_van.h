@@ -142,6 +142,7 @@ protected:
 			while(true){
 				{
 					{
+						std::lock_guard<std::mutex> lk(send_myself_mu_);
 						if(send_myself_){
 							check_send_myself_ = true;
 							return ret;
@@ -625,14 +626,8 @@ protected:
 				std::lock_guard<std::mutex> lk(send_myself_mu_);
 				if(!send_myself_){
 					send_myself_ = true;
-					if(myself_meta_buff){
-						delete[] myself_meta_buff;
-					}
-					// PS_VLOG(1) << my_node_.ShortDebugString() << " send to myself with sender: " << 
-					// 	msg.meta.recver;
-
-					PackMeta(msg.meta, &myself_meta_buff, &myself_meta_size);
-					return sizeof(myself_meta_size);
+					myself_meta = msg.meta;
+					return sizeof(myself_meta);
 				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -699,11 +694,13 @@ protected:
 		// receive meta.
 		wc = poll_cq_message(nullptr);
 		if(send_myself_ && check_send_myself_){
-			UnpackMeta(myself_meta_buff, myself_meta_size, &(msg->meta));
-			//PS_VLOG(1) << my_node_.ShortDebugString() << " received from myself with bytes: " << myself_meta_size;
-			check_send_myself_ = false;
-			send_myself_ = false;
-			return myself_meta_size;
+			{
+				std::lock_guard<std::mutex> lk(send_myself_mu_);
+				check_send_myself_ = false;
+				send_myself_ = false;
+				msg->meta = myself_meta;
+			}
+			return sizeof(msg->meta);
 		}
 		id = (struct rdma_cm_id *)(uintptr_t)wc.wr_id;
 		conn = (struct connection *)id->context;
@@ -787,8 +784,7 @@ private:
 	std::mutex send_myself_mu_;
 	bool send_myself_ = false;
 	bool check_send_myself_ = false;
-	char *myself_meta_buff;
-	int myself_meta_size;
+	Meta myself_meta;
 
 };
 

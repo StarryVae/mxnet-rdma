@@ -164,7 +164,7 @@ void Van::Receiving() {
     CHECK_NE(recv_bytes, -1);
     recv_bytes_ += recv_bytes;
     if (Postoffice::Get()->verbose() >= 2) {
-      PS_VLOG(2) << my_node_.ShortDebugString() << "receive a message: " << msg.DebugString();
+      PS_VLOG(2) <<  msg.DebugString();
     }
     // duplicated message
     if (resender_ && resender_->AddIncomming(msg)) continue;
