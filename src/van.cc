@@ -73,12 +73,12 @@ void Van::Start() {
   }
   // bind.
   my_node_.port = Bind(my_node_, is_scheduler_ ? 0 : 40);
-  PS_VLOG(1) << "Bind to " << my_node_.DebugString();
+  //PS_VLOG(1) << "Bind to " << my_node_.DebugString();
   CHECK_NE(my_node_.port, -1) << "bind failed";
 
   // connect to the scheduler
   Connect(scheduler_);
-  PS_VLOG(2) << my_node_.ShortDebugString() << " 's node id is " << my_node_.id;
+  //PS_VLOG(2) << my_node_.ShortDebugString() << " 's node id is " << my_node_.id;
   // for debug use
   if (Environment::Get()->find("PS_DROP_MSG")) {
     drop_rate_ = atoi(Environment::Get()->find("PS_DROP_MSG"));
@@ -94,15 +94,15 @@ void Van::Start() {
     msg.meta.control.cmd = Control::ADD_NODE;
     msg.meta.control.node.push_back(my_node_);
     msg.meta.timestamp = timestamp_++;
-    PS_VLOG(1) <<  my_node_.ShortDebugString() << " let the scheduler know myself";
+    //PS_VLOG(1) <<  my_node_.ShortDebugString() << " let the scheduler know myself";
     Send(msg);
-    PS_VLOG(1) <<  my_node_.ShortDebugString() << " already let it know.";
+    //PS_VLOG(1) <<  my_node_.ShortDebugString() << " already let it know.";
   }
   // wait until ready
   while (!ready_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  PS_VLOG(1) << my_node_.ShortDebugString() << " is here after ready_. " ;
+  //PS_VLOG(1) << my_node_.ShortDebugString() << " is here after ready_. " ;
   // resender
   if (Environment::Get()->find("PS_RESEND") && atoi(Environment::Get()->find("PS_RESEND")) != 0) {
     int timeout = 1000;
@@ -111,12 +111,13 @@ void Van::Start() {
     }
     resender_ = new Resender(timeout, 10, this);
   }
-  PS_VLOG(1) << "scheduler is at the end......................................................";
+  //PS_VLOG(1) << "scheduler is at the end......................................................";
   if (!is_scheduler_) {
     // start heartbeat thread
     heartbeat_thread_ = std::unique_ptr<std::thread>(
       new std::thread(&Van::Heartbeat, this));
   }
+  PS_VLOG(1) << my_node_.ShortDebugString() << " Start successfully. " ;
 }
 
 void Van::Stop() {
@@ -138,7 +139,7 @@ int Van::Send(const Message& msg) {
   if (Postoffice::Get()->verbose() >= 2) {
     PS_VLOG(2) << msg.DebugString();
   }
-  PS_VLOG(1) << my_node_.ShortDebugString() << " send a message with " << send_bytes <<" bytes.";
+  //PS_VLOG(1) << my_node_.ShortDebugString() << " send a message with " << send_bytes <<" bytes.";
   return send_bytes;
 }
 
@@ -150,10 +151,10 @@ void Van::Receiving() {
   while (true) {
     Message msg;
     int recv_bytes = RecvMsg(&msg);
-    PS_VLOG(1) << my_node_.ShortDebugString() << " recv a message with " << recv_bytes <<" bytes.";
+    //PS_VLOG(1) << my_node_.ShortDebugString() << " recv a message with " << recv_bytes <<" bytes.";
     // For debug, drop received message
     if (ready_ && drop_rate_ > 0) {
-      unsigned seed = time(NULL) + myZMQVan();_node_.id;
+      unsigned seed = time(NULL) + my_node_.id;
       if (rand_r(&seed) % 100 < drop_rate_) {
         LOG(WARNING) << "Drop message " << msg.DebugString();
         continue;
@@ -172,7 +173,7 @@ void Van::Receiving() {
       // do some management
       auto& ctrl = msg.meta.control;
       if (ctrl.cmd == Control::TERMINATE) {
-        PS_VLOG(1) << my_node_.ShortDebugString() << " is stopped";
+        //PS_VLOG(1) << my_node_.ShortDebugString() << " is stopped";
         ready_ = false;
         break;
       } else if (ctrl.cmd == Control::ADD_NODE) {
@@ -184,7 +185,7 @@ void Van::Receiving() {
         recovery_nodes.control.cmd = Control::ADD_NODE;
         // assign an id
         if (is_scheduler_ && !ready_) {
-        	PS_VLOG(1) << my_node_.ShortDebugString() << " is at assign an ID~~~~~~~~~~~";
+        //	PS_VLOG(1) << my_node_.ShortDebugString() << " is at assign an ID~~~~~~~~~~~";
           CHECK(is_scheduler_);
           CHECK_EQ(ctrl.node.size(), 1);
           if (nodes.control.node.size() < num_nodes) {
@@ -227,7 +228,7 @@ void Van::Receiving() {
         if (is_scheduler_) {
           time_t t = time(NULL);
           if (nodes.control.node.size() == num_nodes) {
-        	PS_VLOG(1) << my_node_.ShortDebugString() << " received assign ID step.................................";
+        	//PS_VLOG(1) << my_node_.ShortDebugString() << " received assign ID step.................................";
             // sort the nodes according their ip and port,
             std::sort(nodes.control.node.begin(), nodes.control.node.end(),
                       [](const Node& a, const Node& b) {
@@ -282,7 +283,7 @@ void Van::Receiving() {
           }
         } else {
           for (const auto& node : ctrl.node) {
-        	  PS_VLOG(1) << my_node_.ShortDebugString() << " is connecting to " << node.id << "==============================================";
+        	  PS_VLOG(1) << my_node_.ShortDebugString() << " is connecting to " << node.id ;
             Connect(node);
             if (!node.is_recovery && node.role == Node::SERVER) ++num_servers_;
             if (!node.is_recovery && node.role == Node::WORKER) ++num_workers_;
@@ -291,7 +292,7 @@ void Van::Receiving() {
           ready_ = true;
         }
       } else if (ctrl.cmd == Control::BARRIER) {
-    	  PS_VLOG(1) << my_node_.ShortDebugString() << " barrier here !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
+    	  //PS_VLOG(1) << my_node_.ShortDebugString() << " barrier here !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
         if (msg.meta.request) {
           if (barrier_count_.empty()) {
             barrier_count_.resize(8, 0);

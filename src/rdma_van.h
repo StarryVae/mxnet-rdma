@@ -101,14 +101,14 @@ protected:
 				{
 					std::lock_guard<std::mutex> lk(cqes_ctrl_mu_);
 					if(!cqes_ctrl_.empty()){
-						PS_VLOG(1) << my_node_.ShortDebugString() <<
-								" cqes_ctrl  still has " << cqes_ctrl_.size() << " entries.";
+						//PS_VLOG(1) << my_node_.ShortDebugString() <<
+						//		" cqes_ctrl  still has " << cqes_ctrl_.size() << " entries.";
 						ret = cqes_ctrl_.front();
 						cqes_ctrl_.erase(cqes_ctrl_.begin());
 						struct rdma_cm_id *id = (struct rdma_cm_id *)(uintptr_t)ret.wr_id;
 						struct connection *conn = conn = (struct connection *)id->context;
-						PS_VLOG(1) << my_node_.ShortDebugString() << " receive a wild card ctrl cqe from "
-								<< conn->sender;
+						// PS_VLOG(1) << my_node_.ShortDebugString() << " receive a wild card ctrl cqe from "
+						// 		<< conn->sender;
 						return ret;
 					}
 				}
@@ -120,14 +120,14 @@ protected:
 					std::lock_guard<std::mutex> lk(cqes_ctrl_mu_);
 					for(auto it=cqes_ctrl_.begin(); it!=cqes_ctrl_.end();it++){
 						if((*it).wr_id==(uintptr_t)id){
-							PS_VLOG(1) << my_node_.ShortDebugString() <<
-									" cqes_ctrl still has " << cqes_ctrl_.size() << " entries.";
+							//PS_VLOG(1) << my_node_.ShortDebugString() <<
+							//		" cqes_ctrl still has " << cqes_ctrl_.size() << " entries.";
 							ret = *it;
 							cqes_ctrl_.erase(it);
 							struct rdma_cm_id *id = (struct rdma_cm_id *)(uintptr_t)ret.wr_id;
 							struct connection *conn = conn = (struct connection *)id->context;
-							PS_VLOG(1) << my_node_.ShortDebugString() << " receive a certain ctrl cqe from "
-									<< conn->sender;
+							// PS_VLOG(1) << my_node_.ShortDebugString() << " receive a certain ctrl cqe from "
+							// 		<< conn->sender;
 							return ret;
 						}
 					}
@@ -154,8 +154,8 @@ protected:
 							cqes_message_.erase(cqes_message_.begin());
 							struct rdma_cm_id *id = (struct rdma_cm_id *)(uintptr_t)ret.wr_id;
 							struct connection *conn = conn = (struct connection *)id->context;
-							PS_VLOG(1) << my_node_.ShortDebugString() << " receive a wild card message cqe from "
-									<< conn->sender;
+							// PS_VLOG(1) << my_node_.ShortDebugString() << " receive a wild card message cqe from "
+							// 		<< conn->sender;
 							return ret;
 						}
 					}
@@ -168,14 +168,14 @@ protected:
 					std::lock_guard<std::mutex> lk(cqes_message_mu_);
 					for(auto it=cqes_message_.begin(); it!=cqes_message_.end();it++){
 						if((*it).wr_id==(uintptr_t)id){
-							PS_VLOG(1) << my_node_.ShortDebugString() <<
-									" cqes_message_ still has " << cqes_message_.size() << " entries.";
+							//PS_VLOG(1) << my_node_.ShortDebugString() <<
+							//		" cqes_message_ still has " << cqes_message_.size() << " entries.";
 							ret = *it;
 							cqes_message_.erase(it);
 							struct rdma_cm_id *id = (struct rdma_cm_id *)(uintptr_t)ret.wr_id;
 							struct connection *conn = conn = (struct connection *)id->context;
-							PS_VLOG(1) << my_node_.ShortDebugString() << " receive a certain messsage cqe from "
-									<< conn->sender;
+							// PS_VLOG(1) << my_node_.ShortDebugString() << " receive a certain messsage cqe from "
+							// 		<< conn->sender;
 							return ret;
 						}
 					}
@@ -211,8 +211,8 @@ protected:
 		  CHECK_EQ(ibv_post_recv(id->qp, &wr, &bad_wr), 0);
 
 		  struct connection *conn = conn = (struct connection *)id->context;
-		  PS_VLOG(1) << my_node_.ShortDebugString() << " post_receive_message to  "
-			<< conn->sender;
+		  //PS_VLOG(1) << my_node_.ShortDebugString() << " post_receive_message to  "
+			//<< conn->sender;
 	}
 	void post_receive_ctrl(struct rdma_cm_id *id){
 		  struct connection *conn = (struct connection *)id->context;
@@ -232,8 +232,8 @@ protected:
 
 		  CHECK_EQ(ibv_post_recv(id->qp, &wr, &bad_wr), 0);
 
-		  PS_VLOG(1) << my_node_.ShortDebugString() << " post_receive_ctrl to  "
-			<< conn->sender;
+		//   PS_VLOG(1) << my_node_.ShortDebugString() << " post_receive_ctrl to  "
+		// 	<< conn->sender;
 	}
 	void post_send_message(struct rdma_cm_id *id, int len){
 		  struct connection *conn = (struct connection *)id->context;
@@ -260,7 +260,7 @@ protected:
 
 		  CHECK_EQ(ibv_post_send(id->qp, &wr, &bad_wr), 0)
 		  	  << "ibv_post_send failed. ";
-		  PS_VLOG(1) << my_node_.ShortDebugString() << " post_send_message to " << conn->sender;
+		  //PS_VLOG(1) << my_node_.ShortDebugString() << " post_send_message to " << conn->sender;
 	}
 	void post_send_ctrl(struct rdma_cm_id *id){
 		struct connection *conn = (struct connection *)id->context;
@@ -279,7 +279,7 @@ protected:
 		sge.length = sizeof(control_message);
 		sge.lkey = conn->ctrl_send_msg_mr->lkey;
 		CHECK_EQ(ibv_post_send(id->qp, &wr, &bad_wr), 0);
-		PS_VLOG(1) << my_node_.ShortDebugString() << " post_send_ctrl to "<< conn->sender;
+		//PS_VLOG(1) << my_node_.ShortDebugString() << " post_send_ctrl to "<< conn->sender;
 	}
 	/* end rdma receive functions and send functions */
 
@@ -360,6 +360,9 @@ protected:
 		CHECK_EQ(rdma_resolve_addr(conn_id, NULL, addr->ai_addr, 500), 0);
 		struct connection *conn = (struct connection *)malloc(sizeof(struct connection));
 		while (!stop_ && rdma_get_cm_event(ec, &connect_event) == 0) {
+			if(stop_){
+					break;
+			}
 			struct rdma_cm_event event_copy;
 			memcpy(&event_copy, connect_event, sizeof(*connect_event));
 			rdma_ack_cm_event(connect_event);
@@ -414,6 +417,7 @@ protected:
 						break;
 					}
 					senders_[conn->sender] = conn->id;
+					PS_VLOG(1) << my_node_.ShortDebugString() << " build connection to " << conn->sender;
 				}
 			}else if(event_copy.event == RDMA_CM_EVENT_DISCONNECTED ){
 				break;
@@ -428,11 +432,14 @@ protected:
 	}
 	void Listening(){
 		while (!stop_ && rdma_get_cm_event(listener_channel_, &listener_event_) == 0) {
+			if(stop_){
+				break;
+			}
 			struct rdma_cm_event event_copy;
 			memcpy(&event_copy, listener_event_, sizeof(*listener_event_));
 			rdma_ack_cm_event(listener_event_);
 
-			PS_VLOG(1) <<  my_node_.ShortDebugString() << " received event type: " << event_copy.event;
+			//PS_VLOG(1) <<  my_node_.ShortDebugString() << " received event type: " << event_copy.event;
 			if (event_copy.event == RDMA_CM_EVENT_CONNECT_REQUEST){
 				//PS_VLOG(1) << my_node_.ShortDebugString() <<" received a connection request.";
 				struct rdma_conn_param cm_params;
@@ -492,6 +499,7 @@ protected:
 						break;
 					}
 					senders_[conn->sender] = conn->id;
+					PS_VLOG(1) << my_node_.ShortDebugString() << " build connection to " << conn->sender;
 				}
 			}
 			else if(event_copy.event == RDMA_CM_EVENT_DISCONNECTED ){
@@ -520,12 +528,12 @@ protected:
 			rdma_disconnect(i.second);
 		}
 		listen_thread_->join();
-		PS_VLOG(1) << my_node_.ShortDebugString() << " listen_thread_ joined";	
+		//PS_VLOG(1) << my_node_.ShortDebugString() << " listen_thread_ joined";	
 		poll_thread_->join();
-		PS_VLOG(1) << my_node_.ShortDebugString() << " poll_thread_ joined";	
+		//PS_VLOG(1) << my_node_.ShortDebugString() << " poll_thread_ joined";	
 		for(int i=0; i<thread_pool_.size(); i++){
 			thread_pool_[i]->join();
-			PS_VLOG(1) << my_node_.ShortDebugString() << " thread " << i  <<" joined";	
+			//PS_VLOG(1) << my_node_.ShortDebugString() << " thread " << i  <<" joined";	
 		}
 		PS_VLOG(1) << my_node_.ShortDebugString() << " stopped";
 		Van::Stop();
@@ -585,7 +593,7 @@ protected:
 			return;
 		}
 		struct addrinfo *addr;
-		PS_VLOG(2) << my_node_.ShortDebugString() << " is connecting to " << node.hostname << " : " << node.port;
+		//PS_VLOG(2) << my_node_.ShortDebugString() << " is connecting to " << node.hostname << " : " << node.port;
 		CHECK_EQ(getaddrinfo(node.hostname.c_str(), std::to_string(node.port).c_str(), NULL, &addr),0);
 		{
 			std::lock_guard<std::mutex> lk(thread_mu_);
@@ -609,8 +617,8 @@ protected:
 					if(myself_meta_buff){
 						delete[] myself_meta_buff;
 					}
-					PS_VLOG(1) << my_node_.ShortDebugString() << " send to myself with sender: " << 
-						msg.meta.recver;
+					// PS_VLOG(1) << my_node_.ShortDebugString() << " send to myself with sender: " << 
+					// 	msg.meta.recver;
 
 					PackMeta(msg.meta, &myself_meta_buff, &myself_meta_size);
 					return sizeof(myself_meta_size);
@@ -681,7 +689,7 @@ protected:
 		wc = poll_cq_message(nullptr);
 		if(send_myself_ && check_send_myself_){
 			UnpackMeta(myself_meta_buff, myself_meta_size, &(msg->meta));
-			PS_VLOG(1) << my_node_.ShortDebugString() << " received from myself with bytes: " << myself_meta_size;
+			//PS_VLOG(1) << my_node_.ShortDebugString() << " received from myself with bytes: " << myself_meta_size;
 			check_send_myself_ = false;
 			send_myself_ = false;
 			return myself_meta_size;
@@ -758,7 +766,8 @@ private:
 	std::vector<ibv_wc> cqes_message_;
 	std::unique_ptr<std::thread> poll_thread_;
 
-	// thread pool
+	// thread poolVLOG(1) << my_node_.ShortDebugString() << " send to myself with sender: " << 
+					// 	msg.meta.recver;
 	std::mutex thread_mu_;
 	std::vector<std::thread *> thread_pool_;
 	std::unique_ptr<std::thread> listen_thread_;
