@@ -136,6 +136,24 @@ protected:
 			}
 		}
 	}
+	struct ibv_wc poll_cq_message_with_imm_1(struct rdma_cm_id *id){
+		ibv_wc ret;
+		while(true){
+			{
+				std::lock_guard<std::mutex> lk(cqes_message_mu_);
+				for(auto it=cqes_message_.begin(); it!=cqes_message_.end();it++){
+					if((*it).wr_id==(uintptr_t)id && ntohl((*it).imm_data)==1){
+						ret = *it;
+						cqes_message_.erase(it);
+						return ret;
+					}
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+	}
+		
+	
 	struct ibv_wc poll_cq_message(struct rdma_cm_id *id){
 		ibv_wc ret;
 		if(!id){
@@ -168,7 +186,7 @@ protected:
 				{
 					std::lock_guard<std::mutex> lk(cqes_message_mu_);
 					for(auto it=cqes_message_.begin(); it!=cqes_message_.end();it++){
-						if((*it).wr_id==(uintptr_t)id){
+						if((*it).wr_id==(uintptr_t)id && ntohl((*it).imm_data) != 1){
 							//PS_VLOG(1) << my_node_.ShortDebugString() <<
 							//		" cqes_message_ still has " << cqes_message_.size() << " entries.";
 							ret = *it;
@@ -622,20 +640,22 @@ protected:
 		int id = msg.meta.recver;
 		CHECK_NE(id, Meta::kEmpty);
 		if(id==my_node_.id){ // send to myself.
-			{
-				std::lock_guard<std::mutex> lk(send_myself_mu_);
-				if(!send_myself_){
-					send_myself_ = true;
-					myself_meta = msg.meta;
-					return sizeof(myself_meta);
+			while(true){
+				{
+					std::lock_guard<std::mutex> lk(send_myself_mu_);
+					if(!send_myself_){
+						send_myself_ = true;
+						myself_meta = msg.meta;
+						return sizeof(myself_meta);
+					}
 				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 
 		auto it = senders_.find(id);
 		if (it == senders_.end()) {
-		  LOG(WARNING) << " there is no socket to node " << id;
+		  LOG(WARNING) << my_node_.ShortDebugString() << " there is no socket to node " << id;
 		  return -1;
 		}
 		connection *conn = (struct connection *)it->second->context;
@@ -648,41 +668,27 @@ protected:
 		post_send_message(conn->id, meta_size);
 		int send_bytes = meta_size;
 
-		// 2. receive data with imm_data = 0.
+		// 2. receive data with imm_data = 1.
 		struct ibv_wc wc;
-		wc = poll_cq_message(conn->id);
-		if(ntohl(wc.imm_data)==1){
-		}else{
-			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a message with imm_data = 1.";
-		}
+		wc = poll_cq_message_with_imm_1(conn->id);
 		// send data
 		int n = msg.data.size();
 		//PS_VLOG(1) << my_node_.ShortDebugString() << " data size is " << n;
 		for(int i=0; i<n; ++i){
 			SArray<char>* data = new SArray<char>(msg.data[i]);
 			memcpy(conn->recv_buffer, data->data(), data->size());
-			post_receive_ctrl(conn->id);
+			post_receive_message(conn->id);
 			post_send_message(conn->id, data->size());
 			send_bytes += data->size();
 
-			wc = poll_cq_ctrl(conn->id);
-			if(conn->ctrl_recv_msg->command==MSG_READY){
-				continue;
-			}else{
-				LOG(FATAL) << my_node_.ShortDebugString() << " should receive a MSG_READY after send data. ";
-			}
+			wc = poll_cq_message_with_imm_1(conn->id);
 		}
-		post_receive_ctrl(conn->id);
+		post_receive_message(conn->id);
 		post_send_message(conn->id, 0);
-		wc = poll_cq_ctrl(conn->id);
-		if(conn->ctrl_recv_msg->command==MSG_DONE){
-			post_receive_message(conn->id);
-			//PS_VLOG(1) << my_node_.ShortDebugString() << " send a message: " << send_bytes << " bytes. ";
-			return send_bytes;
-		}else{
-			LOG(FATAL) << my_node_.ShortDebugString() << " should receive a MSG_DONE at the end. ";
-			return -1;
-		}
+		wc = poll_cq_message_with_imm_1(conn->id);
+		post_receive_message(conn->id);
+		//PS_VLOG(1) << my_node_.ShortDebugString() << " send a message: " << send_bytes << " bytes. ";
+		return send_bytes;
 	}
 	int RecvMsg(Message* msg) override{
 		std::lock_guard<std::mutex> lk(receive_mu_);
@@ -698,7 +704,9 @@ protected:
 				std::lock_guard<std::mutex> lk(send_myself_mu_);
 				check_send_myself_ = false;
 				send_myself_ = false;
-				msg->meta = myself_meta;
+				msg->meta = myself_meta;				
+				msg->meta.sender = my_node_.id;
+				msg->meta.recver = my_node_.id;
 			}
 			return sizeof(msg->meta);
 		}
@@ -706,7 +714,7 @@ protected:
 		conn = (struct connection *)id->context;
 		uint32_t size = ntohl(wc.imm_data);
 		UnpackMeta(conn->recv_buffer, size, &(msg->meta));
-		msg->meta.sender = GetNodeID(conn->recv_buffer, size);
+		msg->meta.sender = conn->sender;
 		msg->meta.recver = my_node_.id;
 		recv_bytes += size;
 
@@ -725,10 +733,10 @@ protected:
 				msg->data.push_back(data);
 				recv_bytes += size;
 				conn->ctrl_send_msg->command = MSG_READY;
-				post_send_ctrl(conn->id);
+				post_send_message(conn->id, 1);
 			}else{
 				conn->ctrl_send_msg->command = MSG_DONE;
-				post_send_ctrl(conn->id);
+				post_send_message(conn->id, 1);
 				break;
 			}
 		}
