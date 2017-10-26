@@ -34,7 +34,6 @@ void RunWorker() {
     if (i > 10) kv.Wait(ts[ts.size()-10]);
   }
   for (int t : ts) kv.Wait(t);
-
   // pull
   std::vector<float> rets;
   kv.Wait(kv.Pull(keys, &rets));
