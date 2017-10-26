@@ -676,15 +676,15 @@ protected:
 		//PS_VLOG(1) << my_node_.ShortDebugString() << " data size is " << n;
 		for(int i=0; i<n; ++i){
 			SArray<char>* data = new SArray<char>(msg.data[i]);
-			memcpy(conn->recv_buffer, data->data(), data->size());
+			memcpy(conn->send_buffer, data->data(), (data->size()) * sizeof(char) );
 			post_receive_message(conn->id);
-			post_send_message(conn->id, data->size());
-			send_bytes += data->size();
+			post_send_message(conn->id, (data->size()) * sizeof(char) );
+			send_bytes += data->size()*sizeof(char);
 
 			wc = poll_cq_message_with_imm_1(conn->id);
 		}
 		post_receive_message(conn->id);
-		post_send_message(conn->id, 0);
+		post_send_message(conn->id, 2); // 0 would conflict with 0 len data.
 		wc = poll_cq_message_with_imm_1(conn->id);
 		post_receive_message(conn->id);
 		//PS_VLOG(1) << my_node_.ShortDebugString() << " send a message: " << send_bytes << " bytes. ";
@@ -726,10 +726,9 @@ protected:
 			wc = poll_cq_message(id);
 			post_receive_message(id);
 			size = ntohl(wc.imm_data);
-			if(size){
+			if(size!=2){
 				SArray<char> data;
-				data.CopyFrom(conn->recv_buffer, size);
-				//data.reset(conn->recv_buff, size);
+				data.CopyFrom(conn->recv_buffer, size/sizeof(char));
 				msg->data.push_back(data);
 				recv_bytes += size;
 				conn->ctrl_send_msg->command = MSG_READY;
