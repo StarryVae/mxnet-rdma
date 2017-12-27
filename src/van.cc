@@ -24,8 +24,11 @@ static const int kDefaultHeartbeatInterval = 0;
 Van* Van::Create(const std::string& type) {
   if (type == "zmq") {
     return new ZMQVan();
-  } else if(type == "rdma"){
+  }
+  else if (type == "rdma") {
     return new RDMAVan();
+  }else if(type=="new_rdma"){
+    return new NewRDMAVan();
   } else {
     LOG(FATAL) << "unsupported van type: " << type;
     return nullptr;

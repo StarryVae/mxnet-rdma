@@ -10,7 +10,7 @@
 
 namespace ps {
 Postoffice::Postoffice() {
-  van_ = Van::Create("rdma");
+  van_ = Van::Create("new_rdma");
   env_ref_ = Environment::_GetSharedRef();
   const char* val = NULL;
   val = CHECK_NOTNULL(Environment::Get()->find("DMLC_NUM_WORKER"));
